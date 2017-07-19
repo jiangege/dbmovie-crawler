@@ -1,1 +1,3 @@
 node_modules/
+doubanDB.db
+cache/
