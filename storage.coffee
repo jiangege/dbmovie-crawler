@@ -1,5 +1,5 @@
 sqlite3 = require('sqlite3').verbose()
-Guid = require 'Guid'
+uuidV4 = require 'uuid/v4'
 db = new sqlite3.Database 'doubanDB.db'
 _ = require 'lodash'
 
@@ -78,7 +78,7 @@ saveSubject = ({
           return reject err if err?
           resolve row.id
       else 
-        id = Guid.raw()
+        id = uuidV4()
         db.run """
           INSERT INTO Subject (id, url, title, subjectId, subtype, 
             imageId, directors, writers, casts, genres, 
@@ -170,7 +170,7 @@ saveImage = ({
           return reject err if err?
           resolve row.id
       else
-        id = Guid.raw()
+        id = uuidV4()
         db.run """
           INSERT INTO File (id, subjectId, source)
           VALUES ($id, $subjectId, $source);
