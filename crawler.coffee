@@ -17,7 +17,7 @@ config =
   retryLimit: 3
   pageLimit: 50
   timeout: 1000 * 10
-  cachePath: "#{__dirname}/cache/temp.json"
+  cachePath: null
 
 crawlerEE = new EventEmitter
 
@@ -36,7 +36,7 @@ superRequest = (options, currRetryCount = 0) ->
   await delay config.requestInterval
   try
     options = { options..., timeout: config.timeout }
-    return await rp.get options
+    await rp.get options
   catch e
     currRetryCount++
     throw e if currRetryCount > 3
@@ -153,7 +153,7 @@ searchSubject = ({ subjectId }) ->
   }
 
 requestFile = (url) ->
-  rp.get {
+  superRequest {
     url
     encoding: null
   }
@@ -175,8 +175,7 @@ runTagsQueue = (tags, tagIndex, hasSubjects = false) ->
     crawlerState.tagIndex = tagIndex
     await saveState()
     subjects = await runSearchSubjectQueue tag, crawlerState.subjectPageStart
-    tagIndex++
-    await runTagsQueue tags, tagIndex, subjects.length > 0
+    await runTagsQueue tags, ++tagIndex, subjects.length > 0
 
 runSearchSubjectQueue = (tag, subjectPageStart) ->
   subjects = await searchSubjects {
