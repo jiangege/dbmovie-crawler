@@ -1,13 +1,25 @@
 rp = require 'request-promise-native'
 cheerio = require 'cheerio'
-model = require './sqlite-driver'
+storage = require './storage'
 _ = require 'lodash'
 jsonfile = require 'jsonfile'
+require 'colors'
+EventEmitter = require 'promise-events'
 
 crawlerState = 
-  currPage: 0
+  tagIndex: 0
+  subjectPageStart: 0
 
-config = null
+cacheState = null
+
+config = 
+  requestInterval: 2000
+  retryLimit: 3
+  pageLimit: 50
+  timeout: 1000 * 10
+  cachePath: "#{__dirname}/cache/temp.json"
+
+crawlerEE = new EventEmitter
 
 delay = (ms) ->
   ctr = null
@@ -20,18 +32,42 @@ delay = (ms) ->
     rej Error 'Cancelled'
   p
 
-searchSubject = ({
+superRequest = (options, currRetryCount = 0) ->
+  await delay config.requestInterval
+  try
+    options = { options..., timeout: config.timeout }
+    return await rp.get options
+  catch e
+    currRetryCount++
+    throw e if currRetryCount > 3
+    console.error "#{options.url} - Ready to retry #{currRetryCount} times...".red
+    superRequest options, currRetryCount
+  
+searchTags = ->
+  types = ['movie', 'tv']
+  tags = []
+  for type in types
+    data = await superRequest {
+      url: "https://movie.douban.com/j/search_tags?type=#{type}"
+      json: true
+    }
+    _tags = data.tags.map (tag) -> { title: tag, type }
+    tags = tags.concat _tags
+  return _.uniq tags
+
+searchSubjects = ({
   type = ''
   tag = ''
   sort = 'recommend'
-  page_limit = 321
+  page_limit = 50
   page_start = 0
 }) ->
-  rp.get {
+  data = await superRequest {
     url: "https://movie.douban.com/j/search_subjects"
     qs: { type, tag, page_limit, sort, page_start }
     json: true
   }
+  if data?.subjects? then data.subjects else []
 
 getAttr = (keyword, info, brackets = null, defaultVal = []) ->
   try
@@ -60,9 +96,9 @@ getAttr = (keyword, info, brackets = null, defaultVal = []) ->
     console.error keyword, e
     return defaultVal
 
-getSubjectDetail = ({ subjectId }) ->
+searchSubject = ({ subjectId }) ->
   url = "https://movie.douban.com/subject/#{subjectId}/"
-  $ = cheerio.load(await rp.get { url })
+  $ = cheerio.load(await superRequest { url })
   title = $('#wrapper #content span[property="v:itemreviewed"]').text().trim()
   image = $('.article .subject #mainpic .nbgnbg img[rel="v:image"]').attr 'src'
   type = $('a.bn-sharing').data 'type'
@@ -94,34 +130,12 @@ getSubjectDetail = ({ subjectId }) ->
     rSubjectId = /subject\/(\w+)?\//.exec(rSubjectUrl)[1]
     recommendations.push { title: rTitle, url: rUrl, subjectId: rSubjectId } 
 
-  # imageBuffer = await requestFile image
-  # imageId = await model.saveImage {
-  #   subjectId
-  #   imageBuffer
-  # }
-
-  # rImagePromises = recommendations.map (recommend) -> 
-  #   new Promise (resolve, reject) ->
-  #     requestFile recommend.url
-  #       .then (imageBuffer) -> resolve imageBuffer
-  #       .catch -> resolve null
-
-  # pBufferArray = await Promise.all rImagePromises
-  # for recommend, i in recommendations
-  #   continue unless pBufferArray[i]?
-  #   imageId = await model.saveImage {
-  #     subjectId: recommend.subjectId
-  #     imageBuffer: pBufferArray[i]
-  #   }
-  #   recommendations[i].imageId = imageId
-  # _.remove recommendations, (recommend) -> not recommend.imageBuffer?
-
   {
     url
     title
     subjectId
     subtype
-    imageId
+    image
     directors
     writers
     casts
@@ -137,29 +151,6 @@ getSubjectDetail = ({ subjectId }) ->
     rating_people
     recommendations
   }
-  # id = await model.saveSubject {
-  #   url
-  #   title
-  #   subjectId
-  #   subtype
-  #   imageId
-  #   directors
-  #   writers
-  #   casts
-  #   genres
-  #   countries
-  #   languages
-  #   pubdates
-  #   durations
-  #   episodes_count
-  #   aka
-  #   summary
-  #   rating
-  #   rating_people
-  #   recommendations
-  # }
-  # console.log id
-  # return id
 
 requestFile = (url) ->
   rp.get {
@@ -167,20 +158,111 @@ requestFile = (url) ->
     encoding: null
   }
 
-init = (_config) ->
-  config = _config
+runTagsQueue = (tags, tagIndex, hasSubjects = false) ->
+  if tagIndex > tags.length - 1
+    if hasSubjects is true
+      crawlerState.tagIndex = 0
+      crawlerState.subjectPageStart += config.pageLimit
+      await runTagsQueue tags, crawlerState.tagIndex, false
+    else
+      return
+  else
+    tag = tags[tagIndex]
+    console.log """
+      Runing type: #{tag.type}
+      Runing tag: #{tag.title}
+    """
+    crawlerState.tagIndex = tagIndex
+    await saveState()
+    subjects = await runSearchSubjectQueue tag, crawlerState.subjectPageStart
+    tagIndex++
+    await runTagsQueue tags, tagIndex, subjects.length > 0
+
+runSearchSubjectQueue = (tag, subjectPageStart) ->
+  subjects = await searchSubjects {
+    tag: tag.title
+    type: tag.type
+    page_limit: config.pageLimit
+    page_start: subjectPageStart
+  }
+    .catch (e) -> console.error "Failed to get subjects from #{tag.title}".red
+  if subjects?
+    for subject in subjects
+      await saveSubject subject, tag.title
+    subjects
+  else []
+
+init = (_config = {}) ->
+  config = { config..., _config... }
+  try
+    cacheState = jsonfile.readFileSync config.cachePath
+  catch e
+    cacheState = {}
+  crawlerState = { crawlerState..., cacheState... }
+
+saveSubject = (subject, tag) ->
+  exist = await storage.existSubject { subjectId: subject.id }
+  if exist is true
+     console.info "The subject already exists #{subject.id}".yellow
+  else 
+    detail = await searchSubject subjectId: subject.id
+    {
+      image
+      recommendations
+      subjectId
+    } = detail
+    imageBuffer = await requestFile image
+      .catch (e) -> console.error "Failed to get image #{image}".red
+    return unless imageBuffer?
+    imageId = await storage.saveImage {
+      subjectId
+      imageBuffer
+    }
+      .catch (e) -> console.error "Failed to store image #{image}".red
+    return unless imageId?
+
+    rImagePromises = recommendations.map (recommend) -> 
+      new Promise (resolve, reject) ->
+        requestFile recommend.url
+          .then (imageBuffer) -> resolve imageBuffer
+          .catch -> resolve null
+
+    pBufferArray = await Promise.all rImagePromises
+    for recommend, i in recommendations
+      continue unless pBufferArray[i]?
+      _imageId = await storage.saveImage {
+        subjectId: recommend.subjectId
+        imageBuffer: pBufferArray[i]
+      }
+        .catch (e) -> console.error "Failed to store image #{recommend.url}".red
+      continue unless _imageId?
+      recommend.imageId = _imageId
+    _.remove recommendations, (recommend) -> not recommend.imageId?
+    id = await storage.saveSubject { detail..., imageId}
+      .catch (e) -> console.error "Failed to store subject #{id}".red
+    return unless id?
+    console.log "Successfully store subject #{detail.subjectId} #{detail.title}".green
+  
+  tags = await storage.addTag { 
+    subjectId: subject.id
+    tags: [tag]
+  }
+    .catch (e) -> console.error "Failed to store tag #{tag} to subject #{subject.id}".red
+  if tags?
+    console.log "Successfully add tag to subject #{subject.id}".green
+
+saveState = ->
+  new Promise (resolve, reject) ->
+    jsonfile.writeFile config.cachePath, crawlerState, {spaces: 2}, (err) -> 
+      if err?
+        console.error "Can not save state to cache \n #{err}".red
+      resolve()
 
 start = ->
-  temp = jsonfile.readFileSync '/cache/temp.json'
-  if temp?
+  tags = await searchTags()      
+  await runTagsQueue tags, crawlerState.tagIndex
 
-stop = ->
-
-
-module.export = {
+module.exports = {
   init
   start
-  stop
 }
-
-getSubjectDetail({ subjectId: '26918285'})

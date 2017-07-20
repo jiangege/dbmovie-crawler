@@ -117,12 +117,14 @@ saveSubject = ({
 
 addTag = ({ subjectId, tags }) ->
   new Promise (resolve, reject) ->
-    db.all "SELECT subjectId FROM Subject WHERE subjectId = $subjectId"
-    , { $subjectId: subjectId }, (err, rows) ->
+    db.get "SELECT tags FROM Subject WHERE subjectId = $subjectId"
+    , { $subjectId: subjectId }, (err, row) ->
       return reject err if err?
-      return resolve() if rows.length is 0
-      subject = rows[0]
-      oldTags = JSON.parse subject.tags
+      return resolve() unless row?
+      try
+        oldTags = JSON.parse row.tags
+      catch e
+        oldTags = []
       oldTags = if _.isArray(oldTags) then oldTags else []
       _.remove oldTags, (tag) -> _.includes tags, tag
       newTags = oldTags.concat tags
@@ -136,7 +138,15 @@ addTag = ({ subjectId, tags }) ->
         $tags: newTagsJSON
       }, (err) ->
         return reject err if err?
-        resolve()
+        resolve tags
+
+
+existSubject = ({ subjectId })->
+  new Promise (resolve, reject) ->
+    db.get "SELECT subjectId FROM Subject WHERE subjectId = $subjectId"
+    , { $subjectId: subjectId }, (err, row) ->
+      return reject err if err?
+      resolve row?
 
 saveImage = ({
   subjectId
@@ -177,4 +187,5 @@ module.exports = {
   saveImage
   addTag
   saveSubject
+  existSubject
 }
