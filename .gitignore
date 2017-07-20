@@ -1,4 +1,5 @@
 node_modules/
 doubanDB.db
-cache/
+cache/*
+!cache/.gitkeep
 .DS_Store
