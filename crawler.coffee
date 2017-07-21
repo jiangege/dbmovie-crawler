@@ -74,7 +74,8 @@ getAttr = (keyword, info, brackets = null, defaultVal = []) ->
     regexp = new RegExp("#{keyword}: (([\\u4e00-\\u9fa5]|.)+)\\n").exec(info)
     if not regexp?
       return defaultVal
-    vals = regexp[1].split('/').map (str) ->
+
+    vals = regexp[1].split(/\s\/\s/).map (str) ->
       if brackets?
         try
           ary = str.split '('
