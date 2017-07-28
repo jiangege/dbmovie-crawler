@@ -2,6 +2,7 @@ sqlite3 = require('sqlite3').verbose()
 uuidV4 = require 'uuid/v4'
 db = new sqlite3.Database 'doubanDB.db'
 _ = require 'lodash'
+fs = require 'fs'
 
 saveSubject = ({
   url
@@ -148,6 +149,7 @@ existSubject = ({ subjectId })->
       return reject err if err?
       resolve row?
 
+
 saveImage = ({
   subjectId
   imageBuffer
@@ -159,29 +161,31 @@ saveImage = ({
       $subjectId: subjectId
     }, (err, row) ->
       return reject err if err?
-      if row?
-        db.run """
-          UPDATE File SET source = $source
-          WHERE subjectId =  $subjectId;
-        """, {
-          $source: imageBuffer,
-          $subjectId: subjectId
-        }, (err) ->
-          return reject err if err?
-          resolve row.id
-      else
-        id = uuidV4()
-        db.run """
-          INSERT INTO File (id, subjectId, source)
-          VALUES ($id, $subjectId, $source);
-        """, {
-          $id: id
-          $source: imageBuffer
-          $subjectId: subjectId
-        }, (err) ->
-          return reject err if err?
-          resolve id
-
+      id = if row? then row.id else uuidV4()
+      filename = "#{id}.webp"
+      fs.writeFile "#{__dirname}/resources/#{filename}", imageBuffer, (err) ->
+        return reject err if err?
+        if row?
+          db.run """
+            UPDATE File SET filename = $filename
+            WHERE subjectId =  $subjectId;
+          """, {
+            $filename: filename,
+            $subjectId: subjectId
+          }, (err) ->
+            return reject err if err?
+            resolve id
+        else
+          db.run """
+            INSERT INTO File (id, subjectId, filename)
+            VALUES ($id, $subjectId, $filename);
+          """, {
+            $id: id
+            $filename: filename
+            $subjectId: subjectId
+          }, (err) ->
+            return reject err if err?
+            resolve id
 
 module.exports = {
   saveImage

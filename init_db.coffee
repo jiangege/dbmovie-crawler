@@ -32,7 +32,7 @@ createTables = ->
       db.run """
         CREATE TABLE IF NOT EXISTS File(
           id TEXT PRIMARY KEY NOT NULL,
-          source BLOB,
+          filename TEXT,
           subjectId TEXT
         );
       """
