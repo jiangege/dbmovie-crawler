@@ -1,4 +1,4 @@
-### douban crawler
+### douban movie subject crawler
 
 Save movie subject to sqlite database
 
@@ -8,5 +8,3 @@ Save movie subject to sqlite database
     npm run start //start crawler
     npm run rm-cache // clean cache !!! please be careful with it
 ```
-   
-`
